@@ -1,0 +1,1876 @@
+---
+title: "GrazingPilot"
+author: "HVM"
+date: "2023-07-25"
+output: html_document
+---
+
+## Install packages
+```{r}
+require(Rmisc) # This is my favourite package for doing data summaries. We'll use its summarySE function later to get means and SEs of various datasets for plotting.
+require(sciplot) # The bargraph.CI function in this package makes barplots w/ error bars a breeze!
+```
+
+
+
+## Import data
+```{r}
+dat <- read.csv("/Users/hollyvm/GoogleSync/StudentWork/MeredithHonig/grazing_on_mixos.csv",header=T)
+dat <- read.csv("/Users/hollyvm/GoogleSync/StudentWork/MeredithHonig/och_palatability_expts - ExptData.csv",header=T)
+dat <- read.csv("/Users/hollyvm/GoogleSync/StudentWork/MeredithHonig/och_palatability_expts.csv",header=T)
+dat <- dat[dat$Expt!=7,] # can comment out with the new dataset
+head(dat) # lets us inspect the first 6 rows
+str(dat) # lets us check the structure of the variables in the dataframe. Mostly looking to make sure the population sizes are "num" for "numeric."
+
+```
+
+
+
+
+## Plot population dynamics
+
+```{r}
+# Make a list of all the different prey concentrations
+preyconc <- levels(as.factor(dat$TargetOchConc))
+preyconc
+
+# Dates for plotting
+days <- c(1:4)
+days
+
+# Select the columns to use for plotting
+preycolumns <- c(17:20)
+head(dat[,preycolumns]) # see how this subsets the data to just the prey columns?
+predcolumns <- c(22:25)
+head(dat[,predcolumns])
+
+
+# Set up colors for each prey concentration; using VanGogh3 palette from MetBrewer https://github.com/BlakeRMills/MetBrewer
+ltgreen <- rgb(156/255,193/255,132/255)
+dkgreen <- rgb(31/255,90/255,37/255)
+ctrlcol <- 'gray80'
+colfunc <- colorRampPalette(c(ltgreen,dkgreen))
+col2use <- colfunc(length(preyconc))
+col2use
+
+
+# Set up line types for different predation treatments
+predtreats <- levels(as.factor(dat$Pred))
+predtreats 
+ltys <- c(1:length(predtreats))
+
+# Set up shapes for different replicates
+pchs <- c(19,21:25)
+reps <- unique(dat$Rep)
+
+# Create a list of unique experiments
+expts <- unique(dat$Expt)
+```
+
+
+```{r,fig.height=4,fig.width=8}
+
+StrainChoice <- 1393
+EvoLightChoice <- 100
+EvoTempChoice <- 18
+AssayTempChoice <- 18
+
+par(mar=c(4,5,1,1),mfrow=c(1,2))
+
+dat2 <- dat[dat$TargetOchConc!=0 & dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+dat2 <- dat[dat$TargetOchConc!=0 &dat$Expt==33,]
+
+plot(days,dat2[1,preycolumns],las=1,xlab='Time (days)',ylab='',log='y',ylim=c((min(dat2[,preycolumns],na.rm=T)),(max(dat2[,preycolumns],na.rm=T))),type='n',main='Prey')
+mtext('Population size (cells/mL)',side=2,line=4)
+
+for(i in 2:length(preyconc)){
+  subdat <- dat2[dat2$TargetOchConc==preyconc[i],]
+  for(j in 1:dim(subdat)[1]){
+    points(days,subdat[j,preycolumns],col=col2use[i],pch=21,bg=col2use[i])
+    if(subdat[j,]$Pred=='Control'){
+      lines(days,subdat[j,preycolumns],col=col2use[i],lty=ltys[1])
+    }      else{
+      lines(days,subdat[j,preycolumns],col=col2use[i],lty=ltys[2])
+    }
+  }
+}
+
+
+dat2 <- dat[dat$Pred!='Control' & dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+dat2 <- dat[dat$Pred!='Control'  &dat$Expt==33,]
+
+plot(days,dat2[1,predcolumns],las=1,xlab='Time (days)',ylab='Population size (cells/mL)',log='y',ylim=c((min(dat2[,predcolumns],na.rm=T)),(max(dat2[,predcolumns],na.rm=T))),type='n',main='Predator')
+#mtext('Population size (cells/mL)',side=2,line=4)
+
+for(i in 1:length(preyconc)){
+  subdat <- dat2[dat2$TargetOchConc==preyconc[i],]
+  for(j in 1:dim(subdat)[1]){
+    points(days,subdat[j,predcolumns],col=col2use[i],pch=21,bg=col2use[i])
+    lines(days,subdat[j,predcolumns],col=col2use[i],lty=2)
+  }
+}
+
+
+```
+
+## Fit growth curves
+
+```{r}
+# Add new columns to our data frame that we will use for prey and predator growth rates and y-intercepts. We'll consider both 48 and 72hr windows for the prey.
+dat$prey.mu.48 <- NaN
+dat$prey.yint.48 <- NaN
+dat$prey.R2.48 <- NaN
+
+dat$prey.mu.72 <- NaN
+dat$prey.yint.72 <- NaN
+dat$prey.R2.72 <- NaN
+
+dat$pred.mu.72 <- NaN
+dat$pred.yint.72 <- NaN
+dat$pred.R2.72 <- NaN
+
+# Fit the growth curves line-by-line, using lm()
+
+for( i in 1:dim(dat)[1] ){ # for each row in the data table
+  if(dat[i,]$AssayTemp %in% c(18,24)){ # excluding 30*C data
+  
+  if(dat[i,]$TargetOchConc!=0){ # Only fit prey if we expect positive densities
+  # Fit all prey
+  lm1 <- lm(log(t(dat[i,preycolumns]))~days)
+  dat$prey.mu.72[i] <- summary(lm1)$coefficients[2,1]
+  dat$prey.yint.72[i] <- summary(lm1)$coefficients[1,1]
+  dat$prey.R2.72[i] <- summary(lm1)$r.squared
+  
+  lm1 <- lm(log(t(dat[i,preycolumns[1:3]]))~days[1:3])
+  dat$prey.mu.48[i] <- summary(lm1)$coefficients[2,1]
+  dat$prey.yint.48[i] <- summary(lm1)$coefficients[1,1]
+  dat$prey.R2.48[i] <- summary(lm1)$r.squared
+  
+  }
+  
+  if( dat[i,]$Pred!='Control' ){ # Only fit predators if we expect non-zero densities
+  # Fit predator
+  lm1 <- lm(log(t(dat[i,predcolumns]))~days)
+  dat$pred.mu.72[i] <- summary(lm1)$coefficients[2,1]
+  dat$pred.yint.72[i] <- summary(lm1)$coefficients[1,1]
+  dat$pred.R2.72[i] <- summary(lm1)$r.squared
+  }
+  }
+}
+
+
+```
+
+
+Let's look at the differences in our 48 vs 72hr curve fits and check our work by adding our growth curves to our plot!
+
+```{r,fig.height=4,fig.width=8}
+
+par(mar=c(4,5,1,1),mfrow=c(1,2))
+
+StrainChoice <- 1393
+EvoLightChoice <- 100
+EvoTempChoice <- 18
+AssayTempChoice <- 18
+
+
+dat2 <- dat[dat$TargetOchConc!=0 & dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+plot(days,dat2[1,preycolumns],las=1,xlab='Time (days)',ylab='',log='y',ylim=c((min(dat2[,preycolumns],na.rm=T)),(max(dat2[,preycolumns],na.rm=T))),type='n',main='Prey')
+mtext('Population size (cells/mL)',side=2,line=4)
+
+for(i in 2:length(preyconc)){
+  subdat <- dat2[dat2$TargetOchConc==preyconc[i],]
+  for(j in 1:dim(subdat)[1]){
+    points(days,subdat[j,preycolumns],col=col2use[i],pch=21,bg=col2use[i])
+    if(subdat[j,]$Pred=='Control'){
+      # 48hr growth curve
+      xcoords <- seq(from = min(days), to = max(days[3]), length.out = 100)
+      ycoords <- exp(subdat[j,]$prey.yint.48)*exp(subdat[j,]$prey.mu.48*xcoords)
+      #lines(xcoords,ycoords,col=col2use[i])
+      lines(xcoords,ycoords,col='red')
+      
+      # 72hr growth curve
+      xcoords <- seq(from = min(days), to = max(days), length.out = 100)
+      ycoords <- exp(subdat[j,]$prey.yint.72)*exp(subdat[j,]$prey.mu.72*xcoords)
+      lines(xcoords,ycoords,col=col2use[i])
+      
+    }      else{
+      # 48hr growth curve
+      xcoords <- seq(from = min(days), to = max(days[3]), length.out = 100)
+      ycoords <- exp(subdat[j,]$prey.yint.48)*exp(subdat[j,]$prey.mu.48*xcoords)
+      #lines(xcoords,ycoords,col=col2use[i],lty=2)
+      lines(xcoords,ycoords,col='red',lty=2)
+      
+      # 72hr growth curve
+      xcoords <- seq(from = min(days), to = max(days), length.out = 100)
+      ycoords <- exp(subdat[j,]$prey.yint.72)*exp(subdat[j,]$prey.mu.72*xcoords)
+      lines(xcoords,ycoords,col=col2use[i],lty=2)
+    }
+  }
+}
+
+
+dat2 <- dat[dat$Pred!='Control' & dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+plot(days,dat2[1,predcolumns],las=1,xlab='Time (days)',ylab='Population size (cells/mL)',log='y',ylim=c((min(dat2[,predcolumns],na.rm=T)),(max(dat2[,predcolumns],na.rm=T))),type='n',main='Predator')
+#mtext('Population size (cells/mL)',side=2,line=4)
+
+for(i in 1:length(preyconc)){
+  subdat <- dat2[dat2$TargetOchConc==preyconc[i],]
+  for(j in 1:dim(subdat)[1]){
+    points(days,subdat[j,predcolumns],col=col2use[i],pch=21,bg=col2use[i])
+      xcoords <- seq(from = min(days), to = max(days), length.out = 100)
+      ycoords <- exp(subdat[j,]$pred.yint.72)*exp(subdat[j,]$pred.mu.72*xcoords)
+      lines(xcoords,ycoords,col=col2use[i])
+      
+  }
+}
+
+
+```
+
+NOTE FOR MEREDITH: I would recommend making subplots for each of the prey treatment levels so that you can examine the data more clearly.
+
+
+
+## Compute grazing rates
+
+Our goal is to use the growth rates of the different organisms to determine the grazing rate. A core part of this is determining differences in prey growth rates between experimental and control wells. We should see that, in the presence of O. marina, our prey grow slower.
+
+
+The first thing that we need to do is match up our control (predator-free) growth rates with our predator ones.
+```{r}
+
+dat$Expt.TargetOchConc.Rep <- paste(dat$Expt,dat$TargetOchConc,dat$Rep,sep='.')
+
+dat$ctrl.prey.mu.48 <- dat[dat$Pred=='Control',]$prey.mu.48[match(dat$Expt.TargetOchConc.Rep,dat[dat$Pred=='Control',]$Expt.TargetOchConc.Rep)] # the "match" function is a really powerful tool for linking data. Here, I'm using the "target prey" variable to make sure I match the correct average growth rates to each row in my data frame.
+
+dat$ctrl.prey.mu.72 <- dat[dat$Pred=='Control',]$prey.mu.72[match(dat$Expt.TargetOchConc.Rep,dat[dat$Pred=='Control',]$Expt.TargetOchConc.Rep)] # the "match" function is a really powerful tool for linking data. Here, I'm using the "target prey" variable to make sure I match the correct average growth rates to each row in my data frame.
+
+head(dat) # we can inspect the data frame to see if this worked. notice how the growth rates line up?
+
+```
+
+From here, we can compute our grazing rates as the difference between the control and +predator growth rates.
+```{r}
+dat$prey.g.48 <- dat$ctrl.prey.mu.48-dat$prey.mu.48
+dat$prey.g.72 <- dat$ctrl.prey.mu.72-dat$prey.mu.72
+```
+
+Computing the per-predator ingestion rate is a little trickier. Ask someone to show you the calculus on the whiteboard, but essentially what we are doing is using the growth rates of both predators and prey to compute mean populations of both, and then computing the per-predator ingestion rate from there. This method follows Jeong & Latz (1994) (https://www.int-res.com/articles/meps/106/m106p173.pdf)
+
+```{r}
+dat$prey.popn.24 <- dat$D1OchPop*(exp(dat$prey.mu.48)-1)/(dat$prey.mu.48) # mean prey population
+dat[dat$TargetOchConc==0,]$prey.popn.24 <- 0
+#dat$prey.popn.24 <- dat$D1OchPop*(exp(dat$prey.mu.72)-1)/(dat$prey.mu.72) # mean prey population
+dat$pred.popn.24 <- dat$D1PredPop*(exp(dat$pred.mu.72)-1)/(dat$pred.mu.72) # mean predator population
+dat$prey.i.24 <- dat$prey.g.48*dat$prey.popn.24/dat$pred.popn.24 # ingestion = mean prey * grazing rate / mean predator
+#dat$prey.i.24 <- dat$prey.g.72*dat$prey.popn.24/dat$pred.popn.24 # ingestion = mean prey * grazing rate / mean predator
+
+# Finally we'll manually fill in grazing and ingestion rates of 0 for 0 prey treatments.
+dat[dat$TargetOchConc==0&dat$Pred!='Control',]$prey.g.48 <- 0
+dat[dat$TargetOchConc==0&dat$Pred!='Control',]$prey.g.72 <- 0
+dat[dat$TargetOchConc==0&dat$Pred!='Control',]$prey.i.24 <- 0
+```
+
+Let's look at our results!
+
+```{r,fig.height=4,fig.width=5}
+
+StrainChoice <- 1393
+EvoLightChoice <- 100
+EvoTempChoice <- 24
+AssayTempChoice <- 18
+
+bargraph.CI(TargetOchConc,prey.i.24,dat=dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,],las=1,xlab='Prey Inoculation Target',ylab='Prey per predator per day')
+
+bargraph.CI(TargetOchConc,prey.i.24,dat=dat[dat$Pred!='Control'& dat$Expt==33,],las=1,xlab='Prey Inoculation Target',ylab='Prey per predator per day')
+```
+
+A scatterplot is even better because we can see our results as a function of the actual initial prey concentration. We can even work on fitting our data with a Holling Type II (saturating) functional response.
+
+```{r,fig.width=5,fig.height=3.5}
+
+par(mar=c(4,4,1,1))
+
+
+
+StrainChoice <- 2951
+EvoLightChoice <- 50
+EvoTempChoice <- 24
+AssayTempChoice <- 18
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='Initial Ochromonas Population',ylab='Ingestion Rate',pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+
+# REP BY REP FIT
+for(i in 1:length(reps)){
+  subdat2 <- subdat[subdat$Rep==reps[i],]
+  a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+  print(h.fit) # printing the handling times because I want to inspect them for negative values
+
+  xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col='gray80')
+}
+
+
+# RE PLOT POINTS SO THEY ARE ON TOP
+points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+# OVERALL FIT
+a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+h.est <- 1/50 # estimate handling time
+
+fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+a.fit <- summary(fit1)$parameters[1,1]
+h.fit <- summary(fit1)$parameters[2,1]
+
+xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+lines(xcoords,ycoords,lwd=2,col='black')
+
+
+
+
+```
+
+
+So I did some manual inspection of the different datasets by changing the "choice" parameters above, and the good news is that the data generally look quite clean, aside from a few outliers. Occasionally, one gets a negative handling time, but these are usually not super negative. Overall, the curve fitting is also working very smoothly, and not throwing too many errors for the core datasets! I also am not noticing many situations where it will be necessary to crop out declining grazing rates at high prey densities.
+
+Here I'm going to set up some "cases" that allow us to get rid of outliers.
+
+```{r,fig.width=5,fig.height=3.5}
+
+par(mar=c(4,4,1,1))
+
+
+
+StrainChoice <- 2951
+EvoLightChoice <- 50
+EvoTempChoice <- 24
+AssayTempChoice <- 18
+
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+# Use a boxplot to identify outliers
+OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc)$out
+
+# Remove those outliers from the dataset
+if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] }
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='Initial Ochromonas Population',ylab='Ingestion Rate',pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+
+# REP BY REP FIT
+for(i in 1:length(reps)){
+  subdat2 <- subdat[subdat$Rep==reps[i],]
+  a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+  print(h.fit)
+
+  xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col='gray80')
+}
+
+
+# RE PLOT POINTS SO THEY ARE ON TOP
+points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+# OVERALL FIT
+a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+h.est <- 1/50 # estimate handling time
+
+fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+a.fit <- summary(fit1)$parameters[1,1]
+h.fit <- summary(fit1)$parameters[2,1]
+
+xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+lines(xcoords,ycoords,lwd=2,col='black')
+
+
+
+
+```
+
+
+Next, I'm going to set up the algorithm to compute both Type I and Type II fits.
+
+```{r,fig.width=5,fig.height=3.5}
+
+par(mar=c(4,4,1,1))
+
+
+
+StrainChoice <- 1393
+EvoLightChoice <- 50
+EvoTempChoice <- 24
+AssayTempChoice <- 24
+
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+# Use a boxplot to identify outliers
+OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out
+
+# Remove those outliers from the dataset
+if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] }
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='Initial Ochromonas Population',ylab='Ingestion Rate',pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+
+# REP BY REP FIT
+for(i in 1:length(reps)){
+  
+  subdat2 <- subdat[subdat$Rep==reps[i],]
+  
+  # TYPE II
+  a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+  #print(h.fit)
+
+  xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col='gray80')
+  
+  # TYPE I (using nls because I want to force the intercept through zero)
+  lm1 <- nls(prey.i.24~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+  s.fit <- summary(lm1)$parameters[1,1]
+  abline(a=0,b=s.fit,col=rgb(0,0,.5,.5),lwd=2)
+  
+}
+
+
+# RE PLOT POINTS SO THEY ARE ON TOP
+points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+# OVERALL FIT
+a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+h.est <- 1/50 # estimate handling time
+
+fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+a.fit <- summary(fit1)$parameters[1,1]
+h.fit <- summary(fit1)$parameters[2,1]
+
+xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+lines(xcoords,ycoords,lwd=2,col='black')
+
+
+
+
+```
+
+But believe it or not, we can get fancier! Let's use the AIC (Akaike Information Criterion) to decide which curve fit is the best and plot only that one.
+
+```{r,fig.width=5,fig.height=3.5}
+
+par(mar=c(4,4,1,1))
+
+
+
+StrainChoice <- 2951
+EvoLightChoice <- 50
+EvoTempChoice <- 24
+AssayTempChoice <- 18
+
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+
+# Use a boxplot to identify outliers
+OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out
+
+# Remove those outliers from the dataset
+if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] }
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='Initial Ochromonas Population',ylab='Ingestion Rate',pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+
+# REP BY REP FIT
+for(i in 1:length(reps)){
+  
+  subdat2 <- subdat[subdat$Rep==reps[i],]
+  
+  # TYPE II
+  a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  
+  AIC.II <- AIC(fit1)
+  
+  # TYPE I (using nls because I want to force the intercept through zero)
+  lm1 <- nls(prey.i.24~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+  
+  AIC.I <- AIC(lm1)
+  
+  # Plot model with the lowest AIC
+  if(AIC.II <= AIC.I){
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+  #print(h.fit)
+
+  xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col='gray80')
+  } else{
+  s.fit <- summary(lm1)$parameters[1,1]
+  abline(a=0,b=s.fit,col=rgb(0,0,.5,.5),lwd=2)
+  
+  h.fit <- summary(fit1)$parameters[2,1]
+  print(h.fit)
+  }
+  
+}
+
+
+# RE PLOT POINTS SO THEY ARE ON TOP
+points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+# OVERALL FIT
+a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+h.est <- 1/50 # estimate handling time
+
+fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+a.fit <- summary(fit1)$parameters[1,1]
+h.fit <- summary(fit1)$parameters[2,1]
+
+xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+lines(xcoords,ycoords,lwd=2,col='black')
+
+
+
+
+```
+
+Unfortunately, that doesn't seem to have eliminated the negative h values. Let's try an alternate approach, in which we also fit a linear model if h < 0.
+
+```{r,fig.width=5,fig.height=3.5}
+
+par(mar=c(4,4,1,1))
+
+
+
+StrainChoice <- 1393
+EvoLightChoice <- 50
+EvoTempChoice <- 24
+AssayTempChoice <- 18
+
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+subdat <- subdat[subdat$prey.i.24>=0,]
+
+# Use a boxplot to identify outliers
+OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out
+
+# Remove those outliers from the dataset
+if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] }
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='Initial Ochromonas Population',ylab='Ingestion Rate',pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+
+# REP BY REP FIT
+for(i in 1:length(reps)){
+  
+  subdat2 <- subdat[subdat$Rep==reps[i],]
+  
+  # TYPE II
+  a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  
+  AIC.II <- AIC(fit1)
+  
+  # TYPE I
+  lm1 <- nls(prey.i.24~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+  
+  AIC.I <- AIC(lm1) + 1 # Penalize the AIC for the linear model by a point because I forced it through zero, so it's fitting one less parameter. (This doesn't seem to make much of a difference.)
+  
+  # Plot model with the lowest AIC
+  if(AIC.II <= AIC.I){
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+  
+  if(h.fit < 0 ){ abline(lm1,col='red') }
+
+  xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col='gray80')
+  } else{
+    
+  s.fit <- summary(lm1)$parameters[1,1]
+  abline(a=0,b=s.fit,col=rgb(0,0,.5,.5),lwd=2)
+  }
+  
+  
+}
+
+
+# RE PLOT POINTS SO THEY ARE ON TOP
+points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=2,col=col2use[as.factor(subdat$TargetOchConc)],bg=col2use[as.factor(subdat$TargetOchConc)])
+
+# OVERALL FIT
+a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+h.est <- 1/50 # estimate handling time
+
+fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+a.fit <- summary(fit1)$parameters[1,1]
+h.fit <- summary(fit1)$parameters[2,1]
+
+xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+lines(xcoords,ycoords,lwd=2,col='black')
+
+
+
+
+```
+
+```{r}
+subdat2 <- subdat[subdat$Rep==reps[i],]
+
+plot(subdat2$prey.popn.24,subdat2$prey.i.24)
+  
+  # TYPE II
+  a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  
+```
+
+
+
+All right. I think we're converging on an algorithm:
+
+1. Remove negative data
+
+2. Remove outliers
+
+3. Fit Type I and Type II functional responses
+
+4. Choose the model with the lowest AIC
+
+5. If the Type II functional response has the lowest AIC and a negative handling time, also choose a Type I functional response.
+
+
+Now let's implement this at scale!
+
+```{r}
+# Create a data frame to hold results
+dat$ID <- paste(dat$Expt,dat$Rep,sep='.')
+fits <- as.data.frame(unique(dat$ID))
+colnames(fits) <- 'ID'
+
+fits$Expt <- dat$Expt[match(fits$ID,dat$ID)]
+fits$Strain <- dat$Strain[match(fits$ID,dat$ID)]
+fits$EvoTemp <- dat$EvoTemp[match(fits$ID,dat$ID)]
+fits$AssayTemp <- dat$AssayTemp[match(fits$ID,dat$ID)]
+fits$EvoLight <- dat$EvoLight[match(fits$ID,dat$ID)]
+fits$AssayLight <- dat$AssayLight[match(fits$ID,dat$ID)]
+fits$Rep <- dat$Rep[match(fits$ID,dat$ID)]
+
+# Create columns to hold Type I results
+fits$TypeI.a <- NaN
+fits$TypeI.a.p <- NaN
+fits$TypeI.a.err <- NaN
+fits$TypeI.AIC <- NaN
+
+# Create columns to hold Type II results
+fits$TypeII.a <- NaN
+fits$TypeII.a.p <- NaN
+fits$TypeII.a.err <- NaN
+fits$TypeII.h <- NaN
+fits$TypeII.h.p <- NaN
+fits$TypeII.h.err <- NaN
+fits$TypeII.AIC <- NaN
+
+# Create columns to hold the 'best choice' results
+fits$Best.a <- NaN
+fits$Best.h <- NaN
+fits$BestModel <- NaN
+
+# Create columns to hold the `global' (all reps fit together) results
+fits$Glob.a <- NaN
+fits$Glob.h <- NaN
+
+head(fits)
+
+
+
+```
+
+OK, we're ready to go!
+
+```{r}
+
+
+
+
+for(i in 1:length(expts)){
+  
+  # Let's only bother with this if we're at a temperature of interest
+  if(fits[fits$Expt==expts[i],]$AssayTemp[1] %in% c(18,24)){
+    # Subset the data
+    subdat <- dat[dat$Pred!='Control' & dat$Expt == expts[i], ]
+    
+    # Data cleaning: Remove negative values and outliers
+    subdat <- subdat[subdat$prey.i.24>=0,] # (removes negative values)
+    OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out # (identifies outliers)
+    if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] } # (removes outliers; note use of "if" statement so you don't crash if there are no outliers)
+
+    # Rep-by-Rep fitting
+    for(j in 1:length(reps)){
+      subdat2 <- subdat[subdat$Rep==reps[j],]
+      # TYPE I
+      lm1 <- nls(prey.i.24~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+      fits[fits$ID == subdat2$ID[1],]$TypeI.a <- summary(lm1)$coefficients[1,1]
+      fits[fits$ID == subdat2$ID[1],]$TypeI.a.err <- summary(lm1)$coefficients[1,2]
+      fits[fits$ID == subdat2$ID[1],]$TypeI.a.p <- summary(lm1)$coefficients[1,4]
+      fits[fits$ID == subdat2$ID[1],]$TypeI.AIC <- AIC(lm1) + 1 # Penalize the AIC for the linear model by a point because I forced it through zero, so it's fitting one less parameter. (This doesn't seem to make much of a difference.)
+  
+      # TYPE II
+      a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+      h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+      if( subdat2$ID[1]=="33.F"){
+    fit1 <- nls(prey.i.24 ~ a*D1OchPop/(1+a*h*D1OchPop),data=subdat2,start = list(a = a.est, h = h.est))
+    } else{
+      fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+    }
+      fits[fits$ID == subdat2$ID[1],]$TypeII.a <- summary(fit1)$parameters[1,1]
+      fits[fits$ID == subdat2$ID[1],]$TypeII.a.err <- summary(fit1)$parameters[1,2]
+      fits[fits$ID == subdat2$ID[1],]$TypeII.a.p <- summary(fit1)$parameters[1,4]
+      fits[fits$ID == subdat2$ID[1],]$TypeII.h <- summary(fit1)$parameters[2,1]
+      fits[fits$ID == subdat2$ID[1],]$TypeII.h.err <- summary(fit1)$parameters[2,2]
+      fits[fits$ID == subdat2$ID[1],]$TypeII.h.p <- summary(fit1)$parameters[2,4]
+      fits[fits$ID == subdat2$ID[1],]$TypeII.AIC <- AIC(fit1)
+      
+      
+      # Choose the best model
+      if( fits[fits$ID == subdat2$ID[1],]$TypeI.AIC < fits[fits$ID == subdat2$ID[1],]$TypeII.AIC ){ # if the Type I model is better
+        fits[fits$ID == subdat2$ID[1],]$Best.a <- fits[fits$ID == subdat2$ID[1],]$TypeI.a
+        fits[fits$ID == subdat2$ID[1],]$Best.h <- 0
+        fits[fits$ID == subdat2$ID[1],]$BestModel <- 'Type I'
+      } else{
+        if( fits[fits$ID == subdat2$ID[1],]$TypeII.h < 0 ){ # if handling time is negative
+          fits[fits$ID == subdat2$ID[1],]$Best.a <- fits[fits$ID == subdat2$ID[1],]$TypeI.a
+          fits[fits$ID == subdat2$ID[1],]$Best.h <- 0
+          fits[fits$ID == subdat2$ID[1],]$BestModel <- 'Type I'
+        } else {
+          fits[fits$ID == subdat2$ID[1],]$Best.a <- fits[fits$ID == subdat2$ID[1],]$TypeII.a
+          fits[fits$ID == subdat2$ID[1],]$Best.h <- fits[fits$ID == subdat2$ID[1],]$TypeII.h
+          fits[fits$ID == subdat2$ID[1],]$BestModel <- 'Type II'
+        }
+      }
+      } # End looping over reps
+    
+    # Global fit
+    a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+    h.est <- 1/max(subdat$prey.i.24,na.rm=T) # estimate handling time
+    fit2 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+    fits[fits$Expt == expts[i],]$Glob.a <- rep(summary(fit1)$parameters[1,1],length(reps))
+    fits[fits$Expt == expts[i],]$Glob.h <- rep(summary(fit1)$parameters[2,1],length(reps))
+    
+  
+  } # End "if" statement to choose whether to perform fits or not
+  
+} # End looping over experiments
+
+
+# Force handling time to zero if using Type I fit
+fits$Best.h.2 <- fits$Best.h
+fits[is.na(fits$Best.h.2),]$Best.h.2 <- 0
+
+
+```
+
+
+OK, we're ready to inspect our results!
+
+```{r}
+
+par(mar=c(4,5,1,1))
+bargraph.CI(EvoLight,Best.a, group= EvoTemp,data=fits[fits$Strain==1393&fits$AssayTemp==18,],las=1,xlab='Evolutionary Light Level',ylab='')
+mtext('Attack Rate',side=2,line=4)
+
+
+bargraph.CI(EvoLight,Best.h, group= EvoTemp,data=fits[fits$Strain==1393&fits$AssayTemp==18,],las=1,xlab='Evolutionary Light Level',ylab='')
+mtext('Handling Time',side=2,line=4)
+
+
+
+bargraph.CI(EvoLight,Best.a, group= EvoTemp,data=fits[fits$Strain==2951&fits$AssayTemp==18,],las=1,xlab='Evolutionary Light Level',ylab='')
+mtext('Attack Rate',side=2,line=4)
+
+
+bargraph.CI(EvoLight,Best.h, group= EvoTemp,data=fits[fits$Strain==2951&fits$AssayTemp==18,],las=1,xlab='Evolutionary Light Level',ylab='')
+mtext('Handling Time',side=2,line=4)
+
+
+```
+
+Example of running a Tukey corrected ANOVA
+
+```{r}
+
+bargraph.CI(EvoLight,Best.a, group= EvoTemp,data=fits[fits$Strain==2951&fits$AssayTemp==18,],las=1,xlab='Evolutionary Light Level',ylab='')
+mtext('Attack Rate',side=2,line=4)
+
+TukeyHSD(aov(Best.a~as.factor(EvoTemp)*as.factor(EvoLight),data=fits[fits$Strain==2951&fits$AssayTemp==18,]))
+```
+
+
+
+
+
+Meredith's figures list:
+
+1. Overlay functional responses from evolution at different temperatures assayed at 18*C. (4 subpanels: 2 strains x 2 light levels.)
+What if we plotted these stacked vertically, with boxplots next to them for the attack rates?
+
+
+```{r,fig.width=6,fig.height=5}
+
+par(mar=c(1,3.5,0.1,1))
+par(mar=c(1,3.6,1.1,.9))
+
+rows.per.treatment <- 4
+cols.per.graph <- c(5,3)
+layout(matrix(c(rep(c(rep(c(1:4),each=rows.per.treatment),13),cols.per.graph[1]),rep(c(rep(c(5:8),each=rows.per.treatment),13),cols.per.graph[2]),rep(c(rep(c(9:12),each=rows.per.treatment),13),cols.per.graph[2])),nrow=17,ncol=11))
+
+
+StrainChoices <- c(1393,2951)
+EvoLightChoices <- c(50,100)
+#EvoTempChoice <- 24
+AssayTempChoice <- 18
+
+# Axis limits
+xlims <- c(0,165000)
+ylims <- matrix(c(19,18,73,45),nrow=2,ncol=2,byrow=T)
+
+
+# Point shapes
+pchs <- c(0,1,2,3,4,6)
+
+# Labels
+labels <- matrix(c(expression(paste('(a) Obligate (CCMP 1391); low light')),'(b) Obligate (CCMP 1391); high light','(c) Facultative (CCMP 2951); low light','(d) Facultative (CCMP 2951); high light'),nrow=2,ncol=2,byrow=T)
+
+
+
+EvoTemps <- c(18,24,30)
+col18 <- rgb(34/255,91/255,178/255) # OKeeffe1
+col24 <- 'gray20'
+col30 <- rgb(150/255,61/255,32/255) # OKeeffe1
+col18bg <- rgb(34/255,91/255,178/255,.5) # OKeeffe1
+col24bg <- 'gray80'
+col30bg <- rgb(150/255,61/255,32/255,.5) # OKeeffe1
+
+
+EvoCols <- c(col18,col24,col30)
+EvoBgCols <- c(col18bg,col24bg,col30bg)
+
+
+ylims.low <- matrix(c(-.45,-.4,-.18,-.15),nrow=2,ncol=2,byrow=T)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+subdat <- dat[dat$Pred!='Control'&dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$AssayTemp==AssayTempChoice,]
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='',ylab='',type='n',xlim=xlims,ylim=c(0,ylims[strainctr,lightctr]),xaxt='n')
+axis(side=1,las=1,labels=F)
+#axis(side=2,las=1,labels=F)
+
+if(lightctr==1){
+  axis(side=2,las=1)
+  if(strainctr==1){
+    legend(122000,9.6,c('18°C','24°C','30°C'),pch=21,col=EvoCols,pt.bg=EvoBgCols,lwd=1,bty='n')  }
+}
+if(strainctr==2){
+  if(lightctr==2){
+    axis(side=1,las=1)
+    mtext(expression(paste('Mean ', italic('Ochromonas'),' population (cells · ',mL^-1,')')),side=1,line=2.2,cex=.8)
+  }
+}
+
+  if(strainctr == 1){
+    if(lightctr==2){
+    mtext(expression(paste('Ingestion rate (',italic('Ochromonas'),' · ',italic('O. marina')^-1,' · ',d^-1,')')),side=2,line=2.3,at=-2,cex=.8)
+  }}
+
+
+for(tempchoice in 1:length(EvoTemps)){
+  EvoTempChoice <- EvoTemps[tempchoice]
+  col2use <- EvoCols[tempchoice]
+  bg2use <- EvoBgCols[tempchoice]
+
+
+
+  subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+subdat <- subdat[subdat$prey.i.24>=0,]
+
+  # Use a boxplot to identify outliers
+  OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out
+
+  # Remove those outliers from the dataset
+  if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] }
+
+
+  # REP BY REP FIT
+  for(i in 1:length(reps)){
+  
+    subdat2 <- subdat[subdat$Rep==reps[i],]
+  
+    # TYPE II
+    if( subdat2$ID[1]=="33.F"){
+    fit1 <- nls(prey.i.24 ~ a*D1OchPop/(1+a*h*D1OchPop),data=subdat2,start = list(a = a.est, h = h.est))
+    AIC.II <- AIC(fit1)
+    } else{
+    a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+    h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+    fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))
+  
+    AIC.II <- AIC(fit1)
+    }
+  
+    # TYPE I
+    lm1 <- nls(prey.i.24~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+  
+    AIC.I <- AIC(lm1) + 1 # Penalize the AIC for the linear model by a point because I forced it through zero, so it's fitting one less parameter. (This doesn't seem to make much of a difference.)
+  
+    # Plot model with the lowest AIC
+    if(AIC.II <= AIC.I){
+    a.fit <- summary(fit1)$parameters[1,1]
+    h.fit <- summary(fit1)$parameters[2,1]
+  
+    if(h.fit < 0 ){ 
+      s.fit <- summary(lm1)$parameters[1,1]
+      xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+      ycoords <- s.fit*xcoords
+      lines(xcoords,ycoords,lwd=1,col=bg2use)
+    #abline(a=0,b=s.fit,col=bg2use,lwd=2)
+    }else{
+    xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+    ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+    lines(xcoords,ycoords,lwd=1,col=bg2use)
+    }
+    } else{
+    
+    s.fit <- summary(lm1)$parameters[1,1]
+      xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+      ycoords <- s.fit*xcoords
+      lines(xcoords,ycoords,lwd=1,col=bg2use)
+    }
+  
+  
+  }
+
+
+  # RE PLOT POINTS SO THEY ARE ON TOP
+  points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=1,col=col2use,bg=bg2use)
+
+# OVERALL FIT
+  a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/50 # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+
+  xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col=col2use)
+
+}
+#text(-7000,ylims[strainctr,lightctr]*.96,labels[strainctr,lightctr],pos=4,cex=1)
+text(-33000,(ylims[strainctr,lightctr]-ylims.low[strainctr,lightctr])*1.12+ylims.low[strainctr,lightctr],labels[strainctr,lightctr],pos=4,cex=1.1,xpd=T)
+}}
+
+
+
+
+# Add boxplots -- attack rate
+
+par(mar=c(1,3.5,1.1,.6))
+signif.mat <- matrix(c('a','a,b','b','a','a','a','a','a','b','a','a','a'),nrow=4,ncol=3,byrow=T)
+signif.y <- matrix(c(1.95,1.2,1.1,1.5,2.95,1.08,.55,1.03,.4,.52,.4,.32),nrow=4,ncol=3,byrow=T)
+
+y.lim.min <- matrix(c(0.38,0.4,0.18,0.18),nrow=2,ncol=2,byrow=T)
+y.lim.max <- matrix(c(2,3,1.05,.55),nrow=2,ncol=2,byrow=T)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+  boxplot(Best.a*10^3~EvoTemp,data=fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,],las=1,xaxt='n',ylab='',xlab='',col=EvoBgCols,border=EvoCols,ylim=c(y.lim.min[strainctr,lightctr],y.lim.max[strainctr,lightctr]))
+  axis(side=1,at=c(1:3),labels=F)
+  if(strainctr==2){
+    if(lightctr==2){
+      axis(side=1,at=c(1:3),labels=c('18°C','24°C','30°C'))
+      mtext('Evolved Temp.',side=1,line=2.2,cex=.8)
+    }
+  }
+  
+  summary.globfit <- summarySE(data = fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,], 'Best.a',groupvars='EvoTemp')
+  points(c(1:3),summary.globfit$Best.a*10^3,pch=23,lwd=3,col='white')
+  points(c(1:3),summary.globfit$Best.a*10^3,pch=23,lwd=3,col=EvoBgCols)
+  points(c(1:3),summary.globfit$Best.a*10^3,pch=23,lwd=2,col=EvoCols)
+  
+  rowcount <- (strainctr-1)*2+lightctr
+  text(1:3,signif.y[rowcount,],signif.mat[rowcount,])
+  
+  if(strainctr==1){
+    if(lightctr==2){
+      mtext(expression(paste('Attack rate (μL · ',predator^-1,' · ',day^-1,')')),side=2,line=2.5,cex=.8,at=-0.2)
+    }
+  }
+  
+}}
+
+
+
+# Add boxplots -- handling time
+par(mar=c(1,3.7,1.1,.4))
+
+signif.mat <- matrix(c('a,b','a','b','a','a','a','a','a','a','a','a','a'),nrow=4,ncol=3,byrow=T)
+signif.y <- matrix(c(2.25,2.35,2.85,2.6,3.25,2.12,.04,.27,.35,.85,.342,.292),nrow=4,ncol=3,byrow=T)
+
+y.lim.min <- matrix(c(.8,.5,0,0),nrow=2,ncol=2,byrow=T)
+y.lim.max <- matrix(c(2.9,3.3,.36,.9),nrow=2,ncol=2,byrow=T)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+  rowcount <- (strainctr-1)*2+lightctr
+  
+  if(rowcount == 3){
+    boxplot(Best.h.2*24~EvoTemp,data=fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,],las=1,xaxt='n',yaxt='n',ylab='',xlab='',col=EvoBgCols,border=EvoCols,ylim=c(y.lim.min[strainctr,lightctr],y.lim.max[strainctr,lightctr]))
+    axis(side = 2, at = c(0,0.1,0.2,0.3),las=1)
+  } else{
+  boxplot(Best.h.2*24~EvoTemp,data=fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,],las=1,xaxt='n',ylab='',xlab='',col=EvoBgCols,border=EvoCols,ylim=c(y.lim.min[strainctr,lightctr],y.lim.max[strainctr,lightctr]))}
+  axis(side=1,at=c(1:3),labels=F)
+  if(strainctr==2){
+    if(lightctr==2){
+      axis(side=1,at=c(1:3),labels=c('18°C','24°C','30°C'))
+      mtext('Evolved Temp.',side=1,line=2.2,cex=.8)
+    }
+  }
+  
+  summary.globfit <- summarySE(data = fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,], 'Best.h.2',groupvars='EvoTemp')
+  points(c(1:3),summary.globfit$Best.h.2*24,pch=23,lwd=3,col='white')
+  points(c(1:3),summary.globfit$Best.h.2*24,pch=23,lwd=3,col=EvoBgCols)
+  points(c(1:3),summary.globfit$Best.h.2*24,pch=23,lwd=2,col=EvoCols)
+  
+  rowcount <- (strainctr-1)*2+lightctr
+  text(1:3,signif.y[rowcount,],signif.mat[rowcount,])
+  
+  
+  if(strainctr==1){
+    if(lightctr==2){
+      mtext(expression(paste('Handling time (predator hours · ',prey^-1,')')),side=2,line=2.5,cex=.8,at=-0.1)
+    }
+  }
+
+
+}}
+
+```
+
+
+```{r}
+# Significance tests: a
+TukeyHSD(aov(Best.a~as.factor(EvoTemp),data=fits[fits$Strain==1393&fits$AssayTemp==18&fits$EvoLight==50,])) # 30 and 18 different
+
+TukeyHSD(aov(Best.a~as.factor(EvoTemp),data=fits[fits$Strain==1393&fits$AssayTemp==18&fits$EvoLight==100,])) # ns
+
+TukeyHSD(aov(Best.a~as.factor(EvoTemp),data=fits[fits$Strain==2951&fits$AssayTemp==18&fits$EvoLight==50,])) # all 3 different
+
+TukeyHSD(aov(Best.a~as.factor(EvoTemp),data=fits[fits$Strain==2951&fits$AssayTemp==18&fits$EvoLight==100,])) # 30 and 18 different
+
+
+# Significance tests: h
+TukeyHSD(aov(Best.h.2~as.factor(EvoTemp),data=fits[fits$Strain==1393&fits$AssayTemp==18&fits$EvoLight==50,])) # 30 and 24 different
+
+TukeyHSD(aov(Best.h.2~as.factor(EvoTemp),data=fits[fits$Strain==1393&fits$AssayTemp==18&fits$EvoLight==100,])) # ns
+
+TukeyHSD(aov(Best.h.2~as.factor(EvoTemp),data=fits[fits$Strain==2951&fits$AssayTemp==18&fits$EvoLight==50,])) # ns
+
+TukeyHSD(aov(Best.h.2~as.factor(EvoTemp),data=fits[fits$Strain==2951&fits$AssayTemp==18&fits$EvoLight==100,])) # ns
+
+```
+
+
+
+2. Overlay functional responses from 24*C evolution at different assay temperatures (to check whether we will retain these data)
+
+
+```{r,fig.width=6,fig.height=5}
+
+par(mar=c(1,3.5,0.1,1))
+par(mar=c(1,3.6,1.1,.9))
+
+rows.per.treatment <- 4
+cols.per.graph <- c(5,3)
+layout(matrix(c(rep(c(rep(c(1:4),each=rows.per.treatment),13),cols.per.graph[1]),rep(c(rep(c(5:8),each=rows.per.treatment),13),cols.per.graph[2]),rep(c(rep(c(9:12),each=rows.per.treatment),13),cols.per.graph[2])),nrow=17,ncol=11))
+
+
+StrainChoices <- c(1393,2951)
+EvoLightChoices <- c(50,100)
+EvoTempChoice <- 24
+#AssayTempChoice <- 18
+
+# Axis limits
+xlims <- c(0,148000)
+ylims <- matrix(c(38,42,75,60),nrow=2,ncol=2,byrow=T)
+
+
+# Point shapes
+pchs <- c(0,1,2,3,4,6)
+
+# Labels
+labels <- matrix(c(expression(paste('(a) Obligate (CCMP 1391); low light')),'(b) Obligate (CCMP 1391); high light','(c) Facultative (CCMP 2951); low light','(d) Facultative (CCMP 2951); high light'),nrow=2,ncol=2,byrow=T)
+
+
+AssayTemps <- c(18,24)
+col18 <- rgb(34/255,91/255,178/255) # OKeeffe1
+#col18 <- rgb(228/255,164/255,53/255) # OKeeffe1
+#col24 <- rgb(34/255,91/255,178/255) # OKeeffe1
+col24 <- 'gray20'
+col30 <- rgb(150/255,61/255,32/255) # OKeeffe1
+col18bg <- rgb(34/255,91/255,178/255,.5) # OKeeffe1
+#col18bg <- rgb(228/255,164/255,53/255,.5) # OKeeffe1
+#col24bg <- rgb(34/255,91/255,178/255,.5) # OKeeffe1
+col24bg <- 'gray80'
+col30bg <- rgb(150/255,61/255,32/255,.5) # OKeeffe1
+
+
+AssayCols <- c(col18,col24)
+AssayBgCols <- c(col18bg,col24bg)
+
+
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+subdat <- dat[dat$Pred!='Control'&dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice,]
+
+plot((subdat$prey.popn.24),subdat$prey.i.24,las=1,xlab='',ylab='',type='n',xlim=xlims,ylim=c(0,ylims[strainctr,lightctr]),xaxt='n')
+axis(side=1,las=1,labels=F)
+#axis(side=2,las=1,labels=F)
+
+if(lightctr==1){
+  axis(side=2,las=1)
+  if(strainctr==1){   }
+}
+if(strainctr==2){
+  if(lightctr==2){
+    axis(side=1,las=1)
+    mtext(expression(paste('Mean ', italic('Ochromonas'),' population (cells · ',mL^-1,')')),side=1,line=2.3,cex=.8)
+    legend(107000,24,c('18°C','24°C'),pch=21,col=EvoCols,pt.bg=EvoBgCols,lwd=1,bty='n')
+  }
+}
+
+  if(strainctr == 1){
+    if(lightctr==2){
+    mtext(expression(paste('Ingestion rate (',italic('Ochromonas'),' · ',italic('O. marina')^-1,' · ',d^-1,')')),side=2,line=2.2,at=-2.5,cex=.8)
+  }}
+
+
+for(tempchoice in 1:length(AssayTemps)){
+  AssayTempChoice <- AssayTemps[tempchoice]
+  col2use <- AssayCols[tempchoice]
+  bg2use <- AssayBgCols[tempchoice]
+
+
+
+  subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$AssayTemp==AssayTempChoice & dat$EvoTemp==EvoTempChoice,]
+subdat <- subdat[subdat$prey.i.24>=0,]
+
+  # Use a boxplot to identify outliers
+  OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out
+
+  # Remove those outliers from the dataset
+  if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] }
+
+
+  # REP BY REP FIT
+  for(i in 1:length(reps)){
+  
+    subdat2 <- subdat[subdat$Rep==reps[i],]
+  
+    # TYPE II
+    a.est <- summary(lm(subdat2[1:3,]$prey.i.24~subdat2[1:3,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+    h.est <- 1/max(subdat2$prey.i.24) # estimate handling time
+
+    if(subdat2$ID[1]=='33.F'){
+      fit1 <- nls(prey.i.24 ~ a*D1OchPop/(1+a*h*D1OchPop),data=subdat2,start = list(a = a.est, h = h.est))
+    } else{ fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat2,start = list(a = a.est, h = h.est))}
+  
+    AIC.II <- AIC(fit1)
+  
+    # TYPE I
+    lm1 <- nls(prey.i.24~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+  
+    AIC.I <- AIC(lm1) + 1 # Penalize the AIC for the linear model by a point because I forced it through zero, so it's fitting one less parameter. (This doesn't seem to make much of a difference.)
+  
+    # Plot model with the lowest AIC
+    if(AIC.II <= AIC.I){
+    a.fit <- summary(fit1)$parameters[1,1]
+    h.fit <- summary(fit1)$parameters[2,1]
+  
+    if(h.fit < 0 ){ 
+      s.fit <- summary(lm1)$parameters[1,1]
+      xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+      ycoords <- s.fit*xcoords
+      lines(xcoords,ycoords,lwd=1,col=bg2use)
+    #abline(a=0,b=s.fit,col=bg2use,lwd=2)
+    }else{
+    xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+    ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+    lines(xcoords,ycoords,lwd=1,col=bg2use)
+    }
+    } else{
+    
+    s.fit <- summary(lm1)$parameters[1,1]
+      xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+      ycoords <- s.fit*xcoords
+      lines(xcoords,ycoords,lwd=1,col=bg2use)
+    }
+  
+  
+  }
+
+
+  # RE PLOT POINTS SO THEY ARE ON TOP
+  points((subdat$prey.popn.24),subdat$prey.i.24,pch=pchs[as.factor(subdat$Rep)],lwd=1,col=col2use,bg=bg2use)
+
+# OVERALL FIT
+  a.est <- summary(lm(subdat[1:7,]$prey.i.24~subdat[1:7,]$prey.popn.24))$coefficients[2,1] # estimate initial slope
+  h.est <- 1/50 # estimate handling time
+
+  fit1 <- nls(prey.i.24 ~ a*prey.popn.24/(1+a*h*prey.popn.24),data=subdat,start = list(a = a.est, h = h.est))
+  a.fit <- summary(fit1)$parameters[1,1]
+  h.fit <- summary(fit1)$parameters[2,1]
+
+  xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords/(1+a.fit*h.fit*xcoords)
+  lines(xcoords,ycoords,lwd=2,col=col2use)
+
+}
+#text(-7000,ylims[strainctr,lightctr]*.96,labels[strainctr,lightctr],pos=4,cex=1)
+text(-33000,(ylims[strainctr,lightctr]-ylims.low[strainctr,lightctr])*1.12+ylims.low[strainctr,lightctr],labels[strainctr,lightctr],pos=4,cex=1.1,xpd=T)
+
+}}
+
+# Add boxplots -- attack rate
+
+par(mar=c(1,.1,0.1,4.5))
+par(mar=c(1,3.2,1.1,.9))
+
+signifs <- matrix(data=c('','','**','*'),nrow=2,ncol=2,byrow=T)
+signifs.y <- matrix(data=c(1,1,0.9,0.85),nrow=2,ncol=2,byrow=T)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+  boxplot(Best.a*10^3~AssayTemp,data=fits[fits$Strain==StrainChoice&fits$EvoTemp==24&fits$EvoLight==EvoLightChoice,],las=1,xaxt='n',ylab='',xlab='',col=AssayBgCols,border=AssayCols);  axis(side=1,at=c(1:3),labels=F)
+  
+  text(1.5,signifs.y[strainctr,lightctr],signifs[strainctr,lightctr],cex=1.5)
+  
+  #axis(side=4,las=1)
+  if(strainctr==2){
+    if(lightctr==2){
+      axis(side=1,at=c(1:2),labels=c('18°C','24°C'))
+      mtext('Assay Temp.',side=1,line=2.2,cex=.8)
+    }
+  }
+  
+  if(strainctr==1){
+    if(lightctr==2){
+      mtext(expression(paste('Attack rate (μL · ',predator^-1,' · ',d^-1,')')),side=2,line=2.4,cex=.8,at=0)
+    }
+  }
+
+
+}}
+
+
+
+# Add boxplots -- handling time
+par(mar=c(1,3.5,1.1,.6))
+
+signifs <- matrix(data=c('**','*','',''),nrow=2,ncol=2,byrow=T)
+signifs.y <- matrix(data=c(2.1,5,0.9,0.85),nrow=2,ncol=2,byrow=T)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+  boxplot(Best.h.2*24~AssayTemp,data=fits[fits$Strain==StrainChoice&fits$EvoTemp==24&fits$EvoLight==EvoLightChoice&fits$AssayTemp!=30,],las=1,xaxt='n',ylab='',xlab='',col=AssayBgCols,border=AssayCols);  axis(side=1,at=c(1:3),labels=F)
+  
+  # Significance markers
+  text(1.5,signifs.y[strainctr,lightctr],signifs[strainctr,lightctr],cex=1.5)
+  
+  if(strainctr==2){
+    if(lightctr==2){
+      axis(side=1,at=c(1:2),labels=c('18°C','24°C'))
+      mtext('Assay Temp.',side=1,line=2.2,cex=.8)
+    }
+  }
+  
+  if(strainctr==1){
+    if(lightctr==2){
+      mtext(expression(paste('Handling time (predator hours · ',prey^-1,')')),side=2,line=2.8,cex=.8,at=-1.5)
+    }
+  }
+
+
+}}
+
+```
+```{r}
+# Significance tests: a
+TukeyHSD(aov(Best.a~as.factor(AssayTemp),data=fits[fits$Strain==1393&fits$EvoTemp==24&fits$EvoLight==50,])) # 30 and 18 different
+
+TukeyHSD(aov(Best.a~as.factor(AssayTemp),data=fits[fits$Strain==1393&fits$EvoTemp==24&fits$EvoLight==100,])) # ns
+
+TukeyHSD(aov(Best.a~as.factor(AssayTemp),data=fits[fits$Strain==2951&fits$EvoTemp==24&fits$EvoLight==50,])) # all 3 different
+
+TukeyHSD(aov(Best.a~as.factor(AssayTemp),data=fits[fits$Strain==2951&fits$EvoTemp==24&fits$EvoLight==100,])) # 30 and 18 different
+
+
+# Significance tests: h
+TukeyHSD(aov(Best.h.2~as.factor(AssayTemp),data=fits[fits$Strain==1393&fits$EvoTemp==24&fits$EvoLight==50 & fits$AssayTemp%in%c(18,24),])) # 30 and 24 different
+
+TukeyHSD(aov(Best.h.2~as.factor(AssayTemp),data=fits[fits$Strain==1393&fits$EvoTemp==24&fits$EvoLight==100 & fits$AssayTemp%in%c(18,24),])) # ns
+
+TukeyHSD(aov(Best.h.2~as.factor(AssayTemp),data=fits[fits$Strain==2951&fits$EvoTemp==24&fits$EvoLight==50 & fits$AssayTemp%in%c(18,24),])) # ns
+
+TukeyHSD(aov(Best.h.2~as.factor(AssayTemp),data=fits[fits$Strain==2951&fits$EvoTemp==24&fits$EvoLight==100 & fits$AssayTemp%in%c(18,24),])) # ns
+
+```
+
+3. Barplots of attack rates (and barplots of handling times for the supplement) (Could this be on the right side of #1 if you stack the subpanels in a column? Might be a bad idea because might want to compare attack rates across light levels and strains.)
+--> could try scatterplot version of this?
+
+4. Overlay predator normalized growth responses (similar to #1 above; 2x2 panel)
+
+
+```{r}
+# Compile a dataset of predator mean growth rates in the control (Ochromonas-free) treatment
+pred.growths <- summarySE(data = dat[dat$TargetOchConc==0 & dat$Pred!='Control',], 'pred.mu.72', groupvars=c('Expt','Strain','EvoTemp','AssayTemp','EvoLight'))
+
+# Match these to the data
+dat$Ctrl.pred.mu.72 <- pred.growths$pred.mu.72[match(dat$Expt,pred.growths$Expt)]
+
+# Subtract from predator growth rates to get a "sensitivity"
+dat$pred.sens.72 <- dat$pred.mu.72-dat$Ctrl.pred.mu.72
+```
+
+
+```{r}
+# Fit linear models
+
+fits$pred.sens.slope <- NaN
+fits$pred.sens.slope.se <- NaN
+fits$pred.sens.slope.tval <- NaN
+fits$pred.sens.slope.pval <- NaN
+fits$Glob.slope <- NaN
+
+a.est <- 1e-6
+      
+
+for(i in 1:length(expts)){
+  
+  # Let's only bother with this if we're at a temperature of interest
+  if(fits[fits$Expt==expts[i],]$AssayTemp[1] %in% c(18,24)){
+    # Subset the data
+    subdat <- dat[dat$Pred!='Control' & dat$Expt == expts[i], ]
+    
+    # Data cleaning: Remove negative values and outliers
+    #subdat <- subdat[subdat$prey.i.24>=0,] # (removes negative values)
+    #OutVals = boxplot(subdat$prey.i.24~subdat$TargetOchConc,plot=F)$out # (identifies outliers)
+    #if(length(OutVals > 0)){ subdat <- subdat[which(subdat$prey.i.24 != OutVals),] } # (removes outliers; note use of "if" statement so you don't crash if there are no outliers)
+
+    # Rep-by-Rep fitting
+    for(j in 1:length(reps)){
+      subdat2 <- subdat[subdat$Rep==reps[j],]
+      # TYPE I
+      lm1 <- nls(pred.sens.72~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+      fits[fits$ID == subdat2$ID[1],]$pred.sens.slope <- summary(lm1)$coefficients[1,1]
+      fits[fits$ID == subdat2$ID[1],]$pred.sens.slope.se <- summary(lm1)$coefficients[1,2]
+      fits[fits$ID == subdat2$ID[1],]$pred.sens.slope.tval <- summary(lm1)$coefficients[1,3]
+      fits[fits$ID == subdat2$ID[1],]$pred.sens.slope.pval <- summary(lm1)$coefficients[1,4]
+    
+      } # End looping over reps
+    
+    # Global fit
+    fit2 <- nls(pred.sens.72 ~ a*prey.popn.24,data=subdat,start = list(a = a.est))
+    fits[fits$Expt == expts[i],]$Glob.slope <- rep(summary(fit2)$parameters[1,1],length(reps))
+    
+  
+  } # End "if" statement to choose whether to perform fits or not
+  
+} # End looping over experiments
+
+
+
+```
+
+Plotting...
+```{r,fig.width=5.5,fig.height=5.4}
+
+par(mar=c(1,4,1.1,1))
+
+rows.per.treatment <- 4
+cols.per.graph <- c(5,3)
+layout(matrix(c(rep(c(rep(c(1:4),each=rows.per.treatment),9),cols.per.graph[1]),rep(c(rep(c(5:8),each=rows.per.treatment),9),cols.per.graph[2])),nrow=17,ncol=8))
+
+
+StrainChoices <- c(1393,2951)
+EvoLightChoices <- c(50,100)
+AssayTempChoice <- 18
+
+# Axis limits
+xlims <- c(0,165000)
+ylims <- matrix(c(.3,.15,.3,.3),nrow=2,ncol=2,byrow=T)
+ylims.low <- matrix(c(-.45,-.4,-.18,-.15),nrow=2,ncol=2,byrow=T)
+
+
+
+EvoTemps <- c(18,24,30)
+col18 <- rgb(34/255,91/255,178/255) # OKeeffe1
+col24 <- rgb(0,0,0,.8)#'gray20'
+col30 <- rgb(150/255,61/255,32/255) # OKeeffe1
+col18bg <- rgb(34/255,91/255,178/255,.5) # OKeeffe1
+col24bg <- rgb(0,0,0,.2)#'gray80'
+col30bg <- rgb(150/255,61/255,32/255,.5) # OKeeffe1
+
+
+EvoCols <- c(col18,col24,col30)
+EvoBgCols <- c(col18bg,col24bg,col30bg)
+
+# Point shapes
+pchs <- c(0,1,2,3,4,6)
+
+# Labels
+labels <- matrix(c(expression(paste('(a) Obligate (CCMP 1391); low light')),'(b) Obligate (CCMP 1391); high light','(c) Facultative (CCMP 2951); low light','(d) Facultative (CCMP 2951); high light'),nrow=2,ncol=2,byrow=T)
+
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+subdat <- dat[dat$Pred!='Control'&dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$AssayTemp==AssayTempChoice,]
+
+plot((subdat$prey.popn.24),subdat$pred.sens.72,las=1,xlab='',ylab='',type='n',xlim=xlims,ylim=c(ylims.low[strainctr,lightctr],ylims[strainctr,lightctr]),xaxt='n')
+axis(side=1,las=1,labels=F)
+#axis(side=2,las=1,labels=F)
+
+if(lightctr==2){
+  axis(side=2,las=1)
+  if(strainctr==2){
+    legend(128000,0.065,c('18°C','24°C','30°C'),pch=21,col=EvoCols,pt.bg=EvoBgCols,lwd=1,bty='n')  }
+}
+if(strainctr==2){
+  if(lightctr==2){
+    axis(side=1,las=1)
+    mtext(expression(paste('Mean ',italic('Ochromonas'),' population (cells · ',mL^-1,')')),side=1,line=2.4,cex=.8)
+  }
+}
+
+  if(strainctr == 1){
+    if(lightctr==2){
+    mtext(expression(paste('Predator normalized growth rate (',d^-1,')')),side=2,line=2.6,at=-.5,cex=.8)
+  }}
+
+
+for(tempchoice in 1:length(EvoTemps)){
+  EvoTempChoice <- EvoTemps[tempchoice]
+  col2use <- EvoCols[tempchoice]
+  bg2use <- EvoBgCols[tempchoice]
+
+
+
+  subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$EvoTemp==EvoTempChoice & dat$AssayTemp==AssayTempChoice,]
+subdat <- subdat[subdat$prey.i.24>=0,]
+
+  # REP BY REP FIT
+  for(i in 1:length(reps)){
+    subdat2 <- subdat[subdat$Rep==reps[i],]
+    lm1 <- nls(pred.sens.72~a*prey.popn.24,data=subdat2,start=list(a=a.est))
+    s.fit <- summary(lm1)$parameters[1,1]
+    xcoords <- seq(from = 0, to = max(subdat2$prey.popn.24,na.rm=T),length.out = 100)
+    ycoords <- s.fit*xcoords
+    lines(xcoords,ycoords,lwd=1,col=bg2use)
+  }
+
+  # RE PLOT POINTS SO THEY ARE ON TOP
+  points((subdat$prey.popn.24),subdat$pred.sens.72,pch=pchs[as.factor(subdat$Rep)],lwd=1,col=col2use,bg=bg2use)
+
+# OVERALL FIT
+  fit1 <- nls(pred.sens.72 ~ a*prey.popn.24,data=subdat,start = list(a = a.est))
+  a.fit <- summary(fit1)$parameters[1,1]
+  xcoords <- seq(from = 0, to = max(subdat$prey.popn.24,na.rm=T),length.out = 100)
+  ycoords <- a.fit*xcoords
+  lines(xcoords,ycoords,lwd=2,col=col2use)
+}
+text(-33000,(ylims[strainctr,lightctr]-ylims.low[strainctr,lightctr])*1.12+ylims.low[strainctr,lightctr],labels[strainctr,lightctr],pos=4,cex=1.1,xpd=T)
+
+}}
+
+# Add boxplots
+
+par(mar=c(1,.1,1.1,4.5))
+par(mar=c(1,3.5,1.1,.6))
+
+box.ylims.min <- matrix(c(-3.4,-3.1,0,-.45),nrow=2,ncol=2,byrow=T)
+box.ylims.max <- matrix(c(3.25,.7,2.8,2.5),nrow=2,ncol=2,byrow=T)
+
+# Significance letters
+signif.mat <- matrix(c('a','a','a','a','a','b','a','a','a','a','a','a'),nrow=4,ncol=3,byrow=T)
+signif.y <- matrix(c(2.3,3.2,.6,.465,.3,-.6,2.7,2.6,1.85,2,2.5,1.3),nrow=4,ncol=3,byrow=T)
+signif.t <- matrix(c('','','','*','*','','**','***','***','','**',''),nrow=4,ncol=3,byrow=T)
+signif.t.y <- matrix(c(0,0,0,-3.1,-2.9,0,.46,.46,.46,0,-.35,0),nrow=4,ncol=3,byrow=T)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+  boxplot(pred.sens.slope*10^6~EvoTemp,data=fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,],ylim=c(box.ylims.min[strainctr,lightctr],box.ylims.max[strainctr,lightctr]),las=1,xaxt='n',yaxt='n',ylab='',xlab='',col='white',border='white');  axis(side=1,at=c(1:3),labels=F)
+  abline(h=0,lty=2)
+  boxplot(pred.sens.slope*10^6~EvoTemp,data=fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,],col=EvoBgCols,border=EvoCols,add=T,xaxt='n',yaxt='n')
+  
+  summary.globfit <- summarySE(data = fits[fits$Strain==StrainChoice&fits$AssayTemp==18&fits$EvoLight==EvoLightChoice,], 'Glob.slope',groupvars='EvoTemp')
+  points(c(1:3),summary.globfit$Glob.slope*10^6,pch=23,lwd=3,col='white')
+  points(c(1:3),summary.globfit$Glob.slope*10^6,pch=23,lwd=3,col=EvoBgCols)
+  points(c(1:3),summary.globfit$Glob.slope*10^6,pch=23,lwd=2,col=EvoCols)
+  
+  rowcount <- (strainctr-1)*2+lightctr
+  text(1:3,signif.y[rowcount,],signif.mat[rowcount,])
+  text(1:3,signif.t.y[rowcount,],signif.t[rowcount,],cex=1.2)
+  
+  axis(side=2,las=1)
+  if(strainctr==2){
+    if(lightctr==2){
+      axis(side=1,at=c(1:3),labels=c('18°C','24°C','30°C'))
+      mtext('Evolved Temp.',side=1,line=2.4,cex=.8)
+    }
+  }
+  
+  if(strainctr==1){
+    if(lightctr==2){
+      mtext(expression(paste('Predator Growth Sensitivity (',10^6,' ',prey^-1,' · ',d^-1,')')),side=2,line=2.6,cex=.8,at=-3)
+    }
+  }
+  
+
+
+}}
+
+```
+
+
+
+Statistical tests:   
+```{r}
+
+TukeyHSD(aov(pred.sens.slope ~ as.factor(EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==50,]))
+summary(lm(pred.sens.slope ~ (EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==50,]))
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==50 & fits$EvoTemp==18,]$pred.sens.slope)
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==50 & fits$EvoTemp==24,]$pred.sens.slope)
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==50 & fits$EvoTemp==30,]$pred.sens.slope)
+
+TukeyHSD(aov(pred.sens.slope ~ as.factor(EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==100,])) # 30°C signif different from all others at p < 0.05
+summary(lm(pred.sens.slope ~ (EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==100,])) # p = 0.02079
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==100 & fits$EvoTemp==18,]$pred.sens.slope) # p = 0.04434
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==100 & fits$EvoTemp==24,]$pred.sens.slope) # p = .02567
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==100 & fits$EvoTemp==30,]$pred.sens.slope)
+
+TukeyHSD(aov(pred.sens.slope ~ as.factor(EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==50,])) #ns
+summary(lm(pred.sens.slope ~ (EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==50,])) #ns
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==50 & fits$EvoTemp==18,]$pred.sens.slope) # p = 0.0009733 ***
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==50 & fits$EvoTemp==24,]$pred.sens.slope) # p = 0.0004433 ***
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==50 & fits$EvoTemp==30,]$pred.sens.slope) # p = 0.0001735 ***
+
+TukeyHSD(aov(pred.sens.slope ~ as.factor(EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==100,])) #ns
+summary(lm(pred.sens.slope ~ as.factor(EvoTemp) , data=fits[fits$AssayTemp==18 & fits$Strain=='1393' & fits$EvoLight==50,])) #ns
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==100 & fits$EvoTemp==18,]$pred.sens.slope) # ns
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==100 & fits$EvoTemp==24,]$pred.sens.slope) # p = 0.002211 **
+t.test(fits[fits$AssayTemp==18 & fits$Strain=='2951' & fits$EvoLight==100 & fits$EvoTemp==30,]$pred.sens.slope) # ns
+
+```
+
+
+HOLLY To-Do : 7 Sept 2023
+- Add stats to the 24*C-evolved comparison
+- Plot ingestion rate vs growth rate, especially at the highest prey densities, and try plotting by Ochromonas strain and by light level?
+- Which is the stronger predictor of mortality: How much Ochromonas is around, or how much you have eaten?
+
+
+```{r, fig.height=7,fig.width=7}
+
+# Labels
+labels <- matrix(c('(a) CCMP 1391, 50μE','(b) CCMP 1391, 100μE','(c) CCMP 2951, 50μE','(d) CCMP 2951, 100μE'),nrow=2,ncol=2,byrow=T)
+
+
+EvoTemps <- c(18,24,30)
+col18 <- rgb(34/255,91/255,178/255) # OKeeffe1
+col24 <- rgb(0,0,0,.8)#'gray20'
+col30 <- rgb(150/255,61/255,32/255) # OKeeffe1
+col18bg <- rgb(34/255,91/255,178/255,.5) # OKeeffe1
+col24bg <- rgb(0,0,0,.2)#'gray80'
+col30bg <- rgb(150/255,61/255,32/255,.5) # OKeeffe1
+
+
+EvoCols <- c(col18,col24,col30)
+EvoBgCols <- c(col18bg,col24bg,col30bg)
+
+AssayTempChoice <- 18
+
+pchs <- c(0,1,2,3,4,6)
+
+par(mar=c(4,4,1,1),mfrow=c(2,2))
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$AssayTemp==AssayTempChoice,]
+
+subdat <- subdat[subdat$prey.i.24>0,]
+
+plot(subdat$pred.mu.72 ~subdat$prey.i.24,type='n',xlab='Ingestion Rate',ylab='Predator Growth Rate',las=1)
+
+
+for(i in 1:length(EvoTemps)){
+  for(j in 1:length(reps)){
+    subsubdat <- subdat[subdat$EvoTemp==EvoTemps[i] & subdat$Rep==reps[j],]
+    lm1 <- lm(pred.mu.72~prey.i.24,data=subsubdat)
+    abline(lm1,lwd=1,lty=1,col=EvoBgCols[i])
+  
+  }
+  
+  
+  # Make a line for all reps
+  subsubdat <- subdat[subdat$EvoTemp==EvoTemps[i],]
+  lm1 <- lm(pred.mu.72~prey.i.24,data=subsubdat)
+  abline(lm1,lwd=2,col=EvoCols[i])
+}
+
+# Add points last so that they're on top
+points(subdat$prey.i.24,subdat$pred.mu.72 ,col=EvoCols[as.factor(subdat$EvoTemp)],pch=pchs[as.factor(subdat$Rep)],bg=EvoBgCols[as.factor(subdat$EvoTemp)],cex=1.5,lwd=2)
+
+text(min(subdat$prey.i.24),max(subdat$pred.mu.72),labels[strainctr,lightctr])
+
+}}
+```
+
+
+Transform these data to be in units of Ochromonas carbon
+
+```{r}
+# Import Michelle's data
+
+dat100 <- read.csv("/Users/hollyvm/GoogleSync/StudentWork/MeredithHonig/OECD100_rev3.csv")
+dat50 <- read.csv("/Users/hollyvm/GoogleSync/StudentWork/MeredithHonig/OECD50_rev3.csv")
+
+# using CN data from Week 141
+dat100.CN <- dat100[!is.na(dat100$pgC.cell) & dat100$Week==141 & dat100$Ev==dat100$Acc,]
+dat50.CN <- dat50[!is.na(dat50$pgC.cell) & dat50$Week==141 & dat50$Ev==dat50$Acc,]
+
+
+dat100.CN$Light <- 100
+dat50.CN$Light <- 50
+
+
+# Update the strain IDs with corrected names
+dat$Strain2 <- dat$Strain
+for(i in 1:dim(dat)[1]){
+  if(dat$Strain[i] == 1393){
+    dat$Strain2[i] <- 1391
+  }
+}
+
+# Create matching ID vector
+dat$ID2 <- paste(dat$EvoLight,dat$Strain2,dat$EvoTemp,dat$Rep,sep='.')
+dat100.CN$ID2 <- paste(dat100.CN$Light,dat100.CN$Strain,dat100.CN$Ev,dat100.CN$Rep,sep='.')
+dat50.CN$ID2 <- paste(dat50.CN$Light,dat50.CN$Strain,dat50.CN$Ev,dat50.CN$Rep,sep='.')
+
+# Subset and compile CN data
+dat100.CN.2 <- dat100.CN[,which(colnames(dat100.CN)%in%c('pgC.cell','pgN.cell','ID2'))]
+dat50.CN.2 <- dat50.CN[,which(colnames(dat50.CN)%in%c('pgC.cell','pgN.cell','ID2'))]
+CN.dat <- rbind(dat100.CN.2,dat50.CN.2)
+
+# Match carbon data
+dat$pgC.cell <- CN.dat$pgC.cell[match(dat$ID2,CN.dat$ID2)]
+dat$pgN.cell <- CN.dat$pgN.cell[match(dat$ID2,CN.dat$ID2)]
+
+# Convert ingestion to carbon
+dat$prey.i.24.C <- dat$prey.i.24*dat$pgC.cell
+
+```
+
+```{r,fig.height=6,fig.width=5.5}
+par(mar=c(4,4,1,1),mfcol=c(3,2))
+
+par(mar=c(0,4,4,1))
+bargraph.CI(Strain,pgC.cell,group=Ev,data=dat50.CN,las=1,legend=F,col=EvoBgCols,border=EvoCols,space=c(0.05,.5),ylab='',err.width=0.05,names=c('',''),main=expression(paste('Low light (50 μmol quanta · ',m^-2,' ',s^-1,')' ))); mtext(expression(paste('Cellular carbon (pg C · ',cell^-1,')')),side=2,line=2.5,cex=.7)
+par(mar=c(2,4,2,1))
+bargraph.CI(Strain,pgN.cell,group=Ev,data=dat50.CN,las=1,col=EvoBgCols,border=EvoCols,space=c(0.05,.5),ylab='',err.width=0.05,names=c('','')); mtext(expression(paste('Cellular nitrogen (pg N · ',cell^-1,')')),side=2,line=2.5,cex=.7)
+par(mar=c(4,4,0,1))
+bargraph.CI(Strain,pgC.cell/pgN.cell,group=Ev,data=dat50.CN,las=1,col=EvoBgCols,border=EvoCols,space=c(0.05,.5),ylab='',err.width=0.05,names=c('Obligate (1391)','Facult. (2951)'),xlab=''); mtext(expression(paste('C:N ratio (pg C · pg ',N^-1,')')),side=2,line=2.5,cex=.7); mtext(expression(paste(italic('Ochromonas'),' strain')),side=1,line=2.5,cex=.7)
+
+par(mar=c(0,2,4,3))
+bargraph.CI(Strain,pgC.cell,group=Ev,data=dat100.CN,las=1,legend=F,col=EvoBgCols,border=EvoCols,space=c(0.05,.5),ylab='',err.width=0.05,names=c('',''),main=expression(paste('High light (100 μmol quanta · ',m^-2,' ',s^-1,')' ))); legend(x='topright',inset=c(0.0,-.01),legend=c('18°C','24°C','30°C'),col=EvoCols,pt.bg=EvoBgCols,pch=22,pt.cex=2,bty='n',cex=1.1)
+par(mar=c(2,2,2,3))
+bargraph.CI(Strain,pgN.cell,group=Ev,data=dat100.CN,las=1,col=EvoBgCols,border=EvoCols,space=c(0.05,.5),ylab='',err.width=0.05,names=c('',''))
+par(mar=c(4,2,0,3))
+bargraph.CI(Strain,pgC.cell/pgN.cell,group=Ev,data=dat100.CN,las=1,col=EvoBgCols,border=EvoCols,space=c(0.05,.5),ylab='',err.width=0.05,names=c('Obligate (1391)','Facult. (2951)'),xlab=''); mtext(expression(paste(italic('Ochromonas'),' strain')),side=1,line=2.5,cex=.7)
+
+
+#par(mar=c(4,4,1,1),mfrow=c(3,1))
+```
+
+
+
+
+```{r, fig.height=7,fig.width=7}
+
+# Labels
+labels <- matrix(c('(a) Obligate, low light','(b) Obligate, high light','(c) Facultative, low light','(d) Facultative, high light'),nrow=2,ncol=2,byrow=T)
+
+
+EvoTemps <- c(18,24,30)
+col18 <- rgb(34/255,91/255,178/255) # OKeeffe1
+col24 <- rgb(0,0,0,.8)#'gray20'
+col30 <- rgb(150/255,61/255,32/255) # OKeeffe1
+col18bg <- rgb(34/255,91/255,178/255,.5) # OKeeffe1
+col24bg <- rgb(0,0,0,.2)#'gray80'
+col30bg <- rgb(150/255,61/255,32/255,.5) # OKeeffe1
+
+
+EvoCols <- c(col18,col24,col30)
+EvoBgCols <- c(col18bg,col24bg,col30bg)
+
+AssayTempChoice <- 18
+
+par(mar=c(4,4,1,1),mfrow=c(2,2))
+
+pchs <- c(0,1,2,3,4,6)
+
+par.bott <- c(1.5,3.5)
+par.top <- c(3.5,1.5)
+par.left <- c(3.5,1.5)
+par.right <- c(1.5,3.5)
+
+for(strainctr in 1:length(StrainChoices)){
+  StrainChoice <- StrainChoices[strainctr]
+
+for(lightctr in 1:length(EvoLightChoices)){
+  EvoLightChoice <- EvoLightChoices[lightctr]
+  
+  par(mar=c(par.bott[strainctr],par.left[lightctr],par.top[strainctr],par.right[lightctr]))
+
+
+subdat <- dat[dat$Pred!='Control'& dat$Strain==StrainChoice & dat$EvoLight==EvoLightChoice & dat$AssayTemp==AssayTempChoice,]
+
+subdat <- subdat[subdat$prey.i.24>0,]
+
+plot(subdat$pred.mu.72 ~subdat$prey.i.24.C,type='n',xlab='',ylab='',las=1)
+if(strainctr==2){
+  if(lightctr==1){
+  mtext(expression(paste('Ingestion Rate (pg C · ',predator^-1,' · ',d^-1,')')),side=1,line=2.5,cex=.9,at=1300)
+  }}
+
+if(strainctr==1){
+  if(lightctr==1){
+  mtext(expression(paste('Predator Growth Rate (',d^-1,')')),side=2,line=2.3,cex=.9,at=-.3)
+  }}
+
+
+# Add points first so they're on the bottom
+points(subdat$prey.i.24.C,subdat$pred.mu.72 ,col=EvoCols[as.factor(subdat$EvoTemp)],pch=pchs[as.factor(subdat$Rep)],bg=EvoBgCols[as.factor(subdat$EvoTemp)],cex=1.5,lwd=1)
+
+for(i in 1:length(EvoTemps)){
+  for(j in 1:length(reps)){
+    subsubdat <- subdat[subdat$EvoTemp==EvoTemps[i] & subdat$Rep==reps[j],]
+    lm1 <- lm(pred.mu.72~prey.i.24.C,data=subsubdat)
+    xset <- seq(from = min(subsubdat$prey.i.24.C),to=max(subsubdat$prey.i.24.C))
+    yset <- lm1$coefficients[1] + xset*lm1$coefficients[2]
+    #lines(xset,yset,col=EvoBgCols[i],lwd=1)
+    lines(xset,yset,col=EvoCols[i],lwd=2)
+    
+  
+  }
+  
+  
+  # Make a line for all reps
+  subsubdat <- subdat[subdat$EvoTemp==EvoTemps[i],]
+  lm1 <- lm(pred.mu.72~prey.i.24.C,data=subsubdat)
+  xset <- seq(from = min(subsubdat$prey.i.24.C),to=max(subsubdat$prey.i.24.C))
+  yset <- lm1$coefficients[1] + xset*lm1$coefficients[2]
+  #lines(xset,yset,col=EvoCols[i],lwd=2)
+  #abline(lm1,lwd=2,col=EvoCols[i])
+}
+
+# Add points last so that they're on top
+#points(subdat$prey.i.24.C,subdat$pred.mu.72 ,col=EvoCols[as.factor(subdat$EvoTemp)],pch=pchs[as.factor(subdat$Rep)],bg=EvoBgCols[as.factor(subdat$EvoTemp)],cex=1.5,lwd=2)
+
+text(max(subdat$prey.i.24.C)*1.05,min(subdat$pred.mu.72),labels[strainctr,lightctr],pos=2)
+
+}}
+```
+
+
